@@ -1,0 +1,60 @@
+use "lmg"
+
+// Реактивное состояние
+var username = ref("")
+var task_count = ref(0)
+var mode = ref("Greeting") // Переключатель режимов UI
+
+window("LimeUI 2.0 - Advanced App", {
+    width: 800,
+    height: 650,
+    render: fn() {
+
+        // --- ЭКРАН 1: Приветствие ---
+        if mode.value == "Greeting" {
+            ret column({ padding: 30, spacing: 20 }, [
+                text("Welcome to the LimeUI!", {
+                    size: 24, bold: true, color: rgb(40, 100, 200), align: "center", height: 50
+                }),
+
+                text("Enter your name:", { size: 16, color: rgb(80, 80, 80), height: 30 }),
+
+                input(username.value, fn(val) { username.value = val }, {
+                    height: 40, size: 18
+                }),
+
+                column({ weight: 1 }, []),
+
+                button("Start working", fn() {
+                    if username.value != "" { mode.value = "Tasks" print(mode.value)}
+                }, { height: 50, size: 16, bold: true })
+            ])
+        }
+
+        else {
+            ret column({ padding: 15, spacing: 15 }, [
+                row({ height: 40 }, [
+                    text("Рабочий стол", { size: 20, bold: true, color: rgb(200, 50, 50), weight: 1 }),
+                    button("Выход", fn() { mode.value = "Приветствие" }, { width: 100 })
+                ]),
+
+                text("Пользователь: " .. username.value, { size: 16, italic: true, height: 25 }),
+
+                ({ height: 100, spacing: 10 }, [
+                    column({ weight: 1 }, [
+                        text("Счетчик задач:", { size: 14, height: 25 }),
+                        text(task_count.value, { size: 36, bold: true, color: rgb(0, 150, 0), align: "center", height: 60 })
+                    ]),
+                    column({ weight: 1, padding: 0 }, [
+                        button("+ Добавить задачу", fn() { task_count.value = task_count.value + 1 }, { height: 45 }),
+                        button("- Удалить задачу", fn() {
+                            if task_count.value > 0 { task_count.value = task_count.value - 1 }
+                        }, { height: 45 })
+                    ])
+                ]) >> row,
+
+                column({ weight: 1 }, [])
+            ])
+        }
+    }
+})

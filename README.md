@@ -1,400 +1,298 @@
-# Lime
+# 🍋 LimeLang
 
-> Язык программирования, который компилируется в код для **LuaJIT**.
-> A programming language that compiles to **LuaJIT** code.
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
+[![LuaJIT](https://img.shields.io/badge/Engine-LuaJIT-2C2D72.svg)](https://luajit.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Beta-orange.svg)](https://github.com/Ilya5627/LimeLang-Transpiler)
 
----
+**Python-подобная выразительность. Производительность LuaJIT. Гибкость системного уровня.**
 
-## 🇷🇺 Русская версия
+**Lime** — это современный транслируемый язык программирования, созданный для тех, кто устал выбирать между простотой кода и скоростью его выполнения. Он предлагает чистый, лаконичный синтаксис в духе Python, но под капотом генерирует высокооптимизированный код для молниеносного движка **LuaJIT**, с нативной поддержкой C-библиотек (FFI) и реактивным программированием из коробки.
 
-### Суть языка
-
-Lime — это язык с простым, лаконичным синтаксисом (`.lm`-файлы), который компилируется напрямую в Lua-код для **LuaJIT**. Так как LuaJIT - это один из самых быстрых JIT-рантаймов в мире для динамического языка, который при выполнении занимает единицы мегабайт. Также он имеет мощный механизм - FFI - прямое выполнение кода C.
-
-Lime создан с целью убрать её главную боль — многословность.
-
-Компилятор работает следующим образом: лексер → парсер (строит AST) → генератор кода (AST → LuaJIT код). Компилятор написан на Python с целью использовать его библиотеку - lupa 2.8 - которая предоставляет возможность встраивать в Lua-code python функции. В Lime это делается с целью получить возможность импорта любой питон библиотеки без особой потери скорости.
-
-### Кратко
-
-LIME — это не замена Python.
-Это мост, который соединяет:
-
-🐍 Богатство Python-экосистемы
-
-⚡ Скорость LuaJIT и C
-
-🧠 Удобство собственного синтаксиса
-
-Правильно выбирая инструмент под задачу, ты получаешь лучшее из всех миров.
-
-### Почему это интересно
-
-- **Скорость исполнения** — весь сгенерированный код выполняется LuaJIT, который является легковесным и быстрым.
-- **Прямая работа с нативными библиотеками** без написания C-обвязки или отдельного модуля на C/C++.
-- **Компактный синтаксис** — блоки `{ }`, минимум ключевых слов, никакого шаблонного кода.
-- **Прозрачность** — выход компилятора — обычный Lua/LuaJIT-код, его можно встроить куда угодно, где уже есть LuaJIT (игровые движки, embedded-скрипты, high-perf сервисы).
-
-### Пример: подключение DLL в Lime
-
-Подключить функцию `add(int, int)` из `mylib.dll`:
-
-**Lime:**
-```
-usec "mylib" {
-    "int add(int a, int b);"
-} as mylib
-
-var result = mylib.add(2, 3)
-```
-
-Разница с Python — не только в количестве строк. В Python нужно отдельно объявлять `argtypes`/`restype` для каждой функции через API `ctypes`. В Lime вы просто пишете C-сигнатуру как строку — так, как она выглядит в заголовочном файле — и получаете рабочий биндинг. Компилятор сам находит библиотеку (`.dll`/`.so`/`.dylib` — в зависимости от ОС) в папке проекта, рабочей директории, системных путях и `PATH`/`LD_LIBRARY_PATH`.
-
-### Пример: структуры в Lime
-
-**Lime:**
-```
-struct Point {
-    x: i,
-    y: i
-}
-```
-
-В Lime структура сразу становится полноценным типом FFI - C-структурой, что по сравнению с другими языками программирования, например Python или Java, обеспечивает максимальную C-производительность. Такие типы будут работать в минимум 50 раз быстрее Python классов.
-
-Также ключевой особенностью структур является то что они имеют методы. При помощи FFI данные структуры связываются с методами.
-
-Пример:
-
-### Методы у структур
-
-```
-Point:length() {
-    ret self.x * self.y
-}
-```
-
-Вызов как в ООП: `Point:length(p)`. Компилятор превращает это в обычную Lua-функцию в таблице методов структуры — никакой отдельной среды выполнения, всё остаётся идиоматичным Lua.
-
-### Базовый синтаксис
-
-**Комментарии** — однострочные, `//`:
-```
-// комментарий
-```
-
-**Переменные:**
-```
-var x = 10 + 2
-x = 20
-a.b = 5
-arr[0] = 1
-```
-
-**Условия:**
-```
-if x > 5 {
-    ret 1
-} elif x == 5 {
-    ret 0
-} else {
-    ret -1
-}
-```
-
-**Циклы:**
-```
-loop x < 10 {           // аналог while
-    x = x + 1
-}
-
-for i = 0, 10, 1 {      // числовой цикл
-    // тело
-}
-
-for k, v in myTable {   // цикл по коллекции (аналог pairs)
-    // тело
-}
-```
-
-**Функции:**
-```
-fn add(a, b) {
-    ret a + b
-}
-```
-
-**Массивы и словари:**
-```
-var arr = [1, 2, 3]
-var dict = {name: "Lime", [1]: 1}
-```
-
-**Импорт кода:**
-```
-load "utils"      // подключает utils.lm из той же папки
-use "mathx"        // подключает библиотеку libs/mathx/setup.lm
-```
-
-**Операторы:** `+ - * / // % ^`, `== != > < >= <=`, `& |` (логические И/ИЛИ), `#` (длина), `..` (конкатенация строк).
-
-
-**Match/Case:**
-```
-op = "+"
-
-match op:
-    case "+" print("right")
-    case _ {
-        print("It is not +")
-        op = "+"
-    }
-
-//ИЛИ
-
-res = match op:
-    case "+" -> "right"
-    case _ -> "wrong"
-```
-
-
-### Типы полей структур (для `struct`)
-
-| Код | Тип C          |
-|-----|----------------|
-| `i` | `int`          |
-| `f` | `float`        |
-| `d` | `double`       |
-| `s` | `const char*`  |
-| `b` | `bool`         |
-| `p` | `void*`        |
-
-
-### Подключение Python библиотек
-
-Благодаря интеграции с Lupa 2.8, LIME может загружать и использовать любые модули и библиотеки Python — от os и requests до numpy и tensorflow.
-
-Важно понимать:
-
-Однократные вызовы Python-функций (инициализация, загрузка данных, настройка GUI) работают с той же скоростью, что и в Python.
-
-Частые вызовы внутри циклов (сотни тысяч итераций) создают накладные расходы на передачу данных между Lua и Python. Для таких задач лучше использовать FFI-вызовы C-библиотек — это даёт прирост в скорости до 50–100 раз.
-
-В интерактивных приложениях (GUI, игры, веб-серверы) пользователь не заметит разницы, потому что основное время уходит на ожидание ввода-вывода или событий.
-
-Рекомендация:
-Используйте Python для быстрого прототипирования, работы с богатой экосистемой (numpy, pandas, Pillow, scikit-learn) и для одноразовых операций.
-Для вычислений в реальном времени, обработки больших данных или игровых циклов предпочитайте C-библиотеки через FFI — они обеспечат максимальную производительность.
-
-СРЕДНЕЕ ЗАМЕДЛЕНИЕ ПРИ ИСПОЛЬЗОВАНИИ ПИТОН В LIME ПО СРАВНЕНИЮ С ЧИСТОМ ПИТОН: 5-10%.
-
-```
-os = pytdef("os")
-
-print(os.path.exist("main.py"))
-```
-
-
-### Текущее состояние
-
-- Строки без экранирования спецсимволов (пока без `\"`, `\n` и т.п.).
-- Числа без экспоненциальной записи (`1e10`).
-- Планируется добавить enum и interface с FFI.
+> 🚀 *Пишите как на Python. Работайте как на C. Исполняйте на скорости LuaJIT.*
 
 ---
 
-## 🇷🇺 Russian version
+## 🤔 Почему именно Lime?
 
-### The essence of language
 
-Lime is a language with a simple, concise syntax (`.lm` files) that compiles directly into Lua code for **LuaJIT**. Because LuaJIT is one of the fastest JIT runtimes in the world for a dynamic language, which takes up units of megabytes when executed. It also has a powerful mechanism - FFI - direct C code execution.
+| Язык    | Проблема, которую решает Lime                                                                                                                                     |
+| :---------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Python**  | Слишком медленный для real-time задач и игр.                                                                                                               |
+| **C / C++** | Сложный синтаксис, ручное управление памятью, долгая компиляция.                                                                |
+| **Lua**     | 1-индексация массивов, отсутствие современного синтаксиса, слабая стандартная библиотека.                 |
+| **🍋 Lime** | **Решает всё вышеперечисленное:** 0-индексация, современный синтаксис, скорость JIT и прямой доступ к C. |
 
-Lime was created to remove its main pain — verbosity.
+### Ключевые преимущества:
 
-The compiler works as follows: lexer → parser (builds AST) → code generator (AST → LuaJIT code). The compiler is written in Python in order to use its library, lupa 2.8, which provides the ability to embed python functions in Lua code. In Lime, this is done in order to be able to import any python library without much loss of speed.
+1. **Один файл — один проект.** Никаких `CMake`, `requirements.txt` или сложных сборщиков. Просто напишите код и запустите его.
+2. **Встроенная реактивность.** Система сигналов (`ref`, `live`, `watch`) прямо в ядре, вдохновленная SolidJS/Vue, идеальна для UI и игровых состояний.
+3. **Бесшовный FFI.** Подключайте `.dll` / `.so` и описывайте C-структуры прямо в коде Lime.
+4. **Эргономичные ошибки.** Компилятор мапит ошибки Lua обратно на строки вашего исходного `.lm` файла с красивой подсветкой.
 
-### Briefly
+---
 
-LIME is not a replacement for Python.
-This is the bridge that connects:
+## ⚙️ Как это работает? (Микро-архитектура)
 
-The richness of the Python ecosystem
+Lime не является интерпретатором в классическом понимании. Это **транспилятор**, который работает по следующему конвейеру за доли миллисекунд:
 
-⚡ The speed of LuaJIT and C
-
-🧠 Convenience of your own syntax
-
-Choosing the right tool for the task, you get the best of all worlds.
-
-### Why is it interesting
-
-- **Execution speed** — All generated code is executed by LuaJIT, which is lightweight and fast.
-- **Direct work with native libraries** without writing a C-binding or a separate module in C/C++.
-- **Compact syntax** — `{ }` blocks, minimum keywords, no template code.
-- **Transparency** — the output of the compiler is ordinary Lua/LuaJIT code, it can be embedded anywhere where LuaJIT already exists (game engines, embedded scripts, high-perf services).
-
-### Example: connecting a DLL in Lime
-
-Connect the `add(int, int)` function from `mylib.dll `:
-
-**Lime:**
-```
-usec "mylib" {
-    "int add(int a, int b);"
-} as mylib
-
-var result = mylib.add(2, 3)
+```text
+[ main.lm ] 
+    │
+    ├─▶ 1. Lexer & Parser  → Построение Абстрактного Синтаксического Дерева (AST)
+    ├─▶ 2. Code Generator  → Преобразование AST в оптимизированный Lua-код
+    ├─▶ 3. Prelude Inject  → Внедрение стандартной библиотеки (0-индексация, реактивность, FFI)
+    │
+[ output.lua ] ──▶ 4. LuaJIT Runtime → Мгновенная JIT-компиляция и выполнение
 ```
 
-The difference with Python is not only in the number of lines. In Python, you need to declare `argtypes`/`restype` separately for each function via the `ctypes` API. In Lime, you simply write the C-signature as a string — the way it looks in the header file — and get a working binding. The compiler finds the library itself ('.dll`/`.so`/`.dylib' — depending on the OS) in the project folder, working directory, system paths and `PATH`/`LD_LIBRARY_PATH'.
+---
 
-### Example: structures in Lime
+## Примеры кода на Lime
 
-**Lime:**
-```
-struct Point {
-    x: i,
-    y: i
+### 1. Fizz-Buzz
+
+```rust
+for i = 1, 100, 1 {
+    match [i % 3 == 0, i % 5 == 0]:
+        case [true, true] {
+            print("FizzBuzz")
+        }
+        case [false, true] {
+            print("Buzz")
+        }
+        case [true, false] {
+            print("Fizz")
+        }
+        case _ {
+            print(i)
+        }
 }
 ```
 
-In Lime, the structure immediately becomes a full-fledged type of FFI -C structure, which, compared to other programming languages, such as Python or Java, provides maximum C performance. These types will run at least 50 times faster than Python classes.
+### 2. Калькулятор
 
-Also, a key feature of the structures is that they have methods. Using FFI, these structures are linked to methods.
+```kotlin
+var calculate = 0
 
-Example:
+var sqrt = (fn() = calculate * calculate) >> live
 
-### Methods for structures
+var add = fn(a, b) = a + b
+var sub = fn(a, b) = a - b
+var mul = fn(a, b) = a * b
+var div = fn(a, b) = a / b
 
-```
-Point:length() {
-    ret self.x * self.y
-}
-```
+calculate = 123 >> add(5) >> div(156) >> add(6) >> mul(10) // Оператор пайплайн для читаемого формата
 
-The call is like in OOP: `Point:length(p)`. The compiler turns this into a regular Lua function in the structure's method table — no separate runtime environment, everything remains idiomatic Lua.
-
-### Basic syntax
-
-**Comments** — single-line, `//`:
-``
-// comment
+calculate >> print
 ```
 
-**Variables:**
-``
-var x = 10 + 2
-x = 20
-a.b = 5
-arr[0] = 1
-```
+### 3. Http запросы
 
-**Conditions:**
-``
-if x > 5 {
-ret 1
-} elif x == 5 {
-    ret 0
+```swift
+use "nicehttp"
+var post_data = "name=LIME&age=123&city=Somewhere"
+var post_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+res = post("https://httpbin.org/post", post_data, post_headers)
+print("Status:", res["status"])
+if res["status"] == 200 {
+    print("Body:", res["body"])
 } else {
-    ret -1
+    print("Error:", res["error"])
 }
 ```
 
-**Cycles:**
-``
-loop x < 10 { // analog while
-    x = x + 1
+### 4. Car-class
+
+```rust
+struct Car {
+    speed: f
+    model: s
 }
 
-for i = 0, 10, 1 { // numeric loop
-    // body
+c = Car(100, "Lamborghini Aventador")
+
+Car:ride () {
+    print(self.model.." is riding with speed "..self.speed)
 }
 
-for k, v in myTable { // a loop through the collection (analogous to pairs)
-    // body
+c::ride()
+```
+
+## ✨ Возможности и Синтаксис
+
+### 1. Лаконичность и чистота
+
+Никакого синтаксического шума. Только суть.
+
+```rust
+var name = "Lime"
+var version = 1.0
+
+fn greet(user) {
+    ret "Hello, " + user + "! Welcome to v" + version
+}
+
+if version >= 1.0 {
+    print(greet(name))
 }
 ```
 
-**Functions:**
+### 2. Конвейерный оператор (`>>`)
+
+Обрабатывайте данные элегантно, без вложенных вызовов функций ("ад колбэков"). Данные передаются как первый аргумент в следующую функцию.
+
+```kotlin
+var numbers = [1, 2, 3, 4, 5]
+
+// Умножаем каждый элемент на 2 и суммируем результат
+var result = numbers 
+    >> map(fn(x) = x * 2) 
+    >> sum()
+
+print(result) // 30
 ```
-fn add(a, b) {
-    ret a + b
+
+### 3. Встроенная Реактивность (Signals)
+
+Управляйте состоянием декларативно. Идеально для сложных систем без сторонних библиотек.
+
+```lime
+var count = ref(0)
+
+// Вычисляемое значение: обновляется автоматически при изменении зависимостей
+var double_count = live(fn() = count.value * 2)
+
+// Слежение за изменениями
+watch(fn() {
+    print("Count изменился на:", count.value)
+})
+
+count.value = 10 // Автоматически вызовет watch и обновит double_count.value до 20
+```
+
+### 4. Исправленные структуры данных (0-индексация)
+
+Lime исправляет главную "боль" Lua. Массивы начинаются с `0`, а строки и числа получают богатый набор методов из коробки.
+
+```lime
+var users = ["Alice", "Bob", "Charlie"]
+print(users[0])        // "Alice"
+print(users[-1])       // "Charlie" (поддержка отрицательных индексов)
+
+users.push("Dave")
+print(users.len())     // 4
+
+var text = "  hello world  "
+print(text.trim().upper().split(" ")) // ["HELLO", "WORLD"]
+```
+
+### 5. Нативная работа с C (FFI)
+
+Используйте мощь системных библиотек без написания обвязок на C.
+
+```lime
+// Подключаем библиотеку и описываем C-структуру
+usec "physics_lib" {
+    rule: "typedef struct { float x; float y; } Vector2;"
 }
+
+// Создаем экземпляр структуры
+var pos = Vector2(10.5, 20.0)
+print(pos.x) // 10.5
+
+// Вызов C-функции из библиотеки (пример)
+// physics_lib.move_vector(pos, 5.0)
 ```
 
-**Arrays and dictionaries:**
-``
-var arr = [1, 2, 3]
-var dict = {name: "Lime", [1]: 1}
+---
+
+## 🛠 Быстрый старт
+
+### Требования
+
+* Python 3.8 или выше
+* Библиотека `lupa` (Python-обертка над LuaJIT)
+
+### Установка зависимостей
+
+```bash
+pip install lupa
 ```
 
-**Code import:**
-``
-load "utils" // connects utils.lm from the same folder
-use "mathx" // connects the libs/mathx/setup.lm
-library ``
+### Запуск проекта
 
-**Operators:** `+ - * / // % ^`, `== != > < >= <=`, `& |` ( logical AND/OR), `#` (length), `..` (string concatenation).
+Lime поддерживает как запуск отдельных файлов, так и целых директорий.
 
+```bash
+# Запуск конкретного файла
+python main.py path/to/script.lm
 
-**Match/Case:**
-```
-op = "+"
+# Запуск проекта (автоматически ищет main.lm в папке)
+python main.py ./my_project
 
-match op:
-    case "+" print("right")
-    case _ {
-        print("It is not +")
-        op = "+"
-    }
+# Запуск уже скомпилированного output.lua (пропускает парсинг, максимальная скорость)
+python main.py ./my_project --lua
 
-//OR
-
-res = match op:
-    case "+" -> "right"
-    case _ -> "wrong"
+# Скрыть таймер выполнения
+python main.py ./my_project --notime
 ```
 
+---
 
-### Types of structure fields (for `struct')
+## 🎨 Красивая обработка ошибок
 
-| Code | Type C |
-|-----|----------------|
-| `i` | `int`          |
-| `f` | `float`        |
-| `d` | `double`       |
-| `s` | `const char*`  |
-| `b` | `bool`         |
-| `p` | `void*`        |
+Lime заботится о вашем времени. Компилятор перехватывает ошибки Lua и показывает их **в контексте вашего исходного кода Lime**, а не сгенерированного Lua-файла.
 
-
-### Connecting Python libraries
-
-Thanks to its integration with Lupa 2.8, LIME can load and use any Python modules and libraries, from os and requests to numpy and tensorflow.
-
-It is important to understand:
-
-Single Python function calls (initialization, data loading, GUI configuration) work at the same speed as in Python.
-
-Frequent calls within loops (hundreds of thousands of iterations) create overhead costs for data transfer between Lua and Python. For such tasks, it is better to use FFI calls to C libraries - this gives a speed increase of up to 50-100 times.
-
-In interactive applications (GUIs, games, web servers), the user won't notice the difference because most of the time is spent waiting for I/O or events.
-
-Recommendation:
-Use Python for rapid prototyping, working with a rich ecosystem (numpy, pandas, Pillow, scikit-learn) and for one-time operations.
-For real-time computing, big data processing, or game cycles, prefer C libraries via FFI — they will provide maximum performance.
-
-AVERAGE SLOWDOWN WHEN USING PYTHON IN LIME COMPARED TO PURE PYTHON: 5-10%.
-
-```
-os = pytdef("os")
-
-print(os.path.exist("main.py"))
+```text
+Lime Error: variable 'health' is not defined
+ --> main.lm:14
+ 12 | fn take_damage(amount) {
+ 13 |     var new_hp = health - amount
+ 14 |     health = new_hp
+    |     ^^^^^^^^^^^^^^^^
+Hint: do you want to write 'var' before health?
 ```
 
+---
 
-### Current status
+## 📂 Структура проекта
 
-- Strings without escaping special characters (so far without `\"`, `\n`, etc.).
-- Numbers without exponential notation (`1e10`).
-- It is planned to add an enum and interface with FFI.
+Типичный проект на Lime максимально прост и не требует конфигурационных файлов:
+
+```text
+my_lime_project/
+├── main.lm          # Точка входа в приложение
+├── utils.lm         # Дополнительные модули (подключаются через load "utils")
+├── libs/            # Локальные C-библиотеки (.dll / .so / .dylib)
+└── output.lua       # (Генерируется автоматически) Скомпилированный код
+```
+
+---
+
+## 🗺 Roadmap (Планы развития)
+
+- [X]  Базовый синтаксис и типы данных
+- [X]  Оператор конвейера (`>>`)
+- [X]  Реактивная система (`ref`, `live`, `watch`)
+- [X]  FFI и описание C-структур (`usec`)
+- [X]  Красивые трейсбеки ошибок с привязкой к исходному коду
+- [ ]  Компиляция в standalone исполняемые файлы (`--build-exe`)
+- [X]  Собственный пакетный менеджер и реестр модулей
+- [ ]  Поддержка асинхронности (`async` / `await`)
+- [ ]  Перегрузка операторов
+
+---
+
+## 🤝 Участие в разработке
+
+Lime находится в стадии активной **Beta-разработки**. Мы открыты к предложениям и критике!
+Нашли баг? Хотите добавить новый синтаксический сахар? Создавайте Issue или отправляйте Pull Request.
+
+🔗 **Репозиторий:** [github.com/Ilya5627/LimeLang-Transpiler](https://github.com/Ilya5627/LimeLang-Transpiler)
+
+---
+
+<p align="center">
+  <i>Сделано с 🍋 и любовью к чистому, быстрому коду.</i>
+</p>

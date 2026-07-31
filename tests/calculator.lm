@@ -1,0 +1,12 @@
+var calculate = 0
+
+var sqrt = (fn() = calculate * calculate) >> live
+
+var add = fn(a, b) = a + b
+var sub = fn(a, b) = a - b
+var mul = fn(a, b) = a * b
+var div = fn(a, b) = a / b
+
+calculate = 123 >> add(5) >> div(156) >> add(6) >> mul(10)
+
+calculate >> print
