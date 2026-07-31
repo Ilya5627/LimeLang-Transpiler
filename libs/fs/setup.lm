@@ -1,13 +1,35 @@
-usec "kernel32.dll"{"
-int CreateDirectoryA(const char* lpPathName, void* lpSecurityAttributes);
-int RemoveDirectoryA(const char* lpPathName);
-int DeleteFileA(const char* lpFileName);
-void* CreateFileA(const char* path, int access, int share, void* sec, int creation, int flags, void* template);
-int WriteFile(void* handle, void* buf, int size, void* written, void* overlapped);
-int CloseHandle(void* handle);
-int GetLastError();
-int GetFileSize(void* handle, void* high);
-int ReadFile(void* handle, void* buf, int size, void* read, void* overlapped);"} as "os"
+usec "kernel32.dll" { "
+    int CreateDirectoryA(const char* lpPathName, void* lpSecurityAttributes);
+    int RemoveDirectoryA(const char* lpPathName);
+    int DeleteFileA(const char* lpFileName);
+    void* CreateFileA(const char* path, int access, int share, void* sec, int creation, int flags, void* template);
+    int WriteFile(void* handle, const void* buf, int size, void* written, void* overlapped);
+    int ReadFile(void* handle, void* buf, int size, void* read, void* overlapped);
+    int CloseHandle(void* handle);
+    int GetLastError();
+    int GetFileSize(void* handle, void* high);
+    int GetFileAttributesA(const char* lpFileName);
+    int CopyFileA(const char* lpExistingFileName, const char* lpNewFileName, int bFailIfExists);
+    int MoveFileA(const char* lpExistingFileName, const char* lpNewFileName);
+
+    // Для обхода директорий
+    typedef struct {
+        unsigned long dwFileAttributes;
+        unsigned long ftCreationTime[2];
+        unsigned long ftLastAccessTime[2];
+        unsigned long ftLastWriteTime[2];
+        unsigned long nFileSizeHigh;
+        unsigned long nFileSizeLow;
+        unsigned long dwReserved0;
+        unsigned long dwReserved1;
+        char cFileName[260];
+        char cAlternateFileName[14];
+    } WIN32_FIND_DATAA;
+
+    void* FindFirstFileA(const char* lpFileName, WIN32_FIND_DATAA* lpFindFileData);
+    int FindNextFileA(void* hFindFile, WIN32_FIND_DATAA* lpFindFileData);
+    int FindClose(void* hFindFile);
+" } as "os_"
 
 var GENERIC_READ = 0x80000000
 var GENERIC_WRITE = 0x40000000
@@ -23,37 +45,57 @@ var FILE_SHARE_WRITE = 2
 var FILE_SHARE_DELETE = 4
 
 var FILE_ATTRIBUTE_NORMAL = 0x80
+var INVALID_FILE_ATTRIBUTES = -1
+var FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+
+var INVALID_HANDLE_VALUE = ffi.cast("void*", -1)
 
 fn mkdir(path) {
-    if type(path) != "string" {
-        exit(1)
-    }
-
-    ret os.CreateDirectoryA(path, ffi.cast("void*", 0)) == 1
-}
-
-fn del(path) {
-    if type(path) != "string" {
-        error("Argument of function 'del' must be an string")
-    }
-
-    ret os.DeleteFileA(path) == 1
+    if type(path) != "string" { ret false }
+    ret os_.CreateDirectoryA(path, ffi.cast("void*", 0)) != 0
 }
 
 fn rmdir(path) {
-    if type(path) != "string" {
-        exit(1)
-    }
+    if type(path) != "string" { ret false }
+    ret os_.RemoveDirectoryA(path) != 0
+}
 
-    ret os.RemoveDirectoryA(path) == 1
+fn del(path) {
+    if type(path) != "string" { ret false }
+    ret os_.DeleteFileA(path) != 0
+}
+
+fn exists(path) {
+    if type(path) != "string" { ret false }
+    var attr = os_.GetFileAttributesA(path)
+    ret attr != INVALID_FILE_ATTRIBUTES
+}
+
+fn is_dir(path) {
+    if type(path) != "string" { ret false }
+    var attr = os_.GetFileAttributesA(path)
+    if attr == INVALID_FILE_ATTRIBUTES { ret false }
+
+    ret (attr % 32 >= 16)
+}
+
+fn copy(src, dst, overwrite) {
+    if type(src) != "string" | type(dst) != "string" { ret false }
+    var fail_if_exists = 1
+    if overwrite { fail_if_exists = 0 }
+    ret os_.CopyFileA(src, dst, fail_if_exists) != 0
+}
+
+fn move(src, dst) {
+    if type(src) != "string" | type(dst) != "string" { ret false }
+    ret os_.MoveFileA(src, dst) != 0
 }
 
 fn write(path, content) {
-    if type(path) != "string" {
-        exit(1)
-    }
+    if type(path) != "string" { ret false }
 
-    var handle = os.CreateFileA(
+    var handle = os_.CreateFileA(
         path,
         GENERIC_WRITE,
         0,
@@ -63,28 +105,24 @@ fn write(path, content) {
         ffi.cast("void*", 0)
     )
 
-    if handle == -1 {
-        var err = os.GetLastError()
-        print("Error with creating file. Code: ", err)
+    if handle == INVALID_HANDLE_VALUE {
         ret false
     }
 
     var written = ffi.new("int[1]", 0)
-    var ok = os.WriteFile(handle, ffi.cast("void*", content), #content, written, ffi.cast("void*", 0))
+    var content_str = tostring(content | "")
+    var ok = os_.WriteFile(handle, content_str, #content_str, written, ffi.cast("void*", 0))
 
-    os.CloseHandle(handle)
-
-    ret ok == 1
+    os_.CloseHandle(handle)
+    ret ok != 0
 }
 
-fn read(path) {
-    if type(path) != "string" {
-        exit(1)
-    }
+fn append(path, content) {
+    if type(path) != "string" { ret false }
 
-    var handle = os.CreateFileA(
+    var handle = os_.CreateFileA(
         path,
-        GENERIC_READ,
+        GENERIC_WRITE,
         FILE_SHARE_READ,
         ffi.cast("void*", 0),
         OPEN_ALWAYS,
@@ -92,30 +130,83 @@ fn read(path) {
         ffi.cast("void*", 0)
     )
 
-    if handle == -1 {
-        var err = os.GetLastError()
-        print("Error with opening file. Code: ", err)
-        ret false
+    if handle == INVALID_HANDLE_VALUE { ret false }
+
+
+    var size = os_.GetFileSize(handle, ffi.cast("void*", 0))
+
+    var written = ffi.new("int[1]", 0)
+    var content_str = tostring(content | "")
+
+    var ok = os_.WriteFile(handle, content_str, #content_str, written, ffi.cast("void*", 0))
+    os_.CloseHandle(handle)
+    ret ok != 0
+}
+
+fn read(path) {
+    if type(path) != "string" {
+        ret {"error": -1, "data": ""}
     }
 
-    var size = os.GetFileSize(handle, ffi.cast("void*", 0))
-    if size == 0 {
-        os.CloseHandle(handle)
-        ret {"error": 0, "data": ""}
-    }
+    var handle = os_.CreateFileA(
+        path,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        ffi.cast("void*", 0),
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        ffi.cast("void*", 0)
+    )
 
-    var buf = ffi.new("char[?]", size + 1)
-
-    var bytes_read = ffi.new("int[1]", 0)
-    var ok = os.ReadFile(handle, buf, size, bytes_read, ffi.cast("void*", 0))
-
-    os.CloseHandle(handle)
-
-    if ok == 0 {
-        var err = os.GetLastError()
+    if handle == INVALID_HANDLE_VALUE {
+        var err = os_.GetLastError()
         ret {"error": err, "data": ""}
     }
 
-    var data = ffi.string(buf)
+    var size = os_.GetFileSize(handle, ffi.cast("void*", 0))
+    if size <= 0 {
+        os_.CloseHandle(handle)
+        ret {"error": 0, "data": ""}
+    }
+
+    var buf = ffi.new("char[?]", size)
+    var bytes_read = ffi.new("int[1]", 0)
+    var ok = os_.ReadFile(handle, buf, size, bytes_read, ffi.cast("void*", 0))
+
+    os_.CloseHandle(handle)
+
+    if ok == 0 {
+        var err = os_.GetLastError()
+        ret {"error": err, "data": ""}
+    }
+
+
+    var data = ffi.string(buf, bytes_read[0])
     ret {"error": 0, "data": data}
+}
+
+fn list(dir_path) {
+    var items = []
+    if type(dir_path) != "string" { ret items }
+
+    var search_path = dir_path .. "\\*"
+    var find_data = ffi.new("WIN32_FIND_DATAA")
+    var hFind = os_.FindFirstFileA(search_path, find_data)
+
+    if hFind == INVALID_HANDLE_VALUE {
+        ret items
+    }
+
+    var has_next = 1
+    loop has_next != 0 {
+        var name = ffi.string(find_data.cFileName)
+
+        if name != "." & name != ".." {
+            items::add(name)
+        }
+        has_next = os_.FindNextFileA(hFind, find_data)
+    }
+
+    os_.FindClose(hFind)
+    ret items
 }

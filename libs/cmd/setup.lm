@@ -1,0 +1,76 @@
+usec "kernel32" { "
+    typedef struct _STARTUPINFOA {
+        unsigned long cb;
+        char* lpReserved;
+        char* lpDesktop;
+        char* lpTitle;
+        unsigned long dwX;
+        unsigned long dwY;
+        unsigned long dwXSize;
+        unsigned long dwYSize;
+        unsigned long dwXCountChars;
+        unsigned long dwYCountChars;
+        unsigned long dwFillAttribute;
+        unsigned long dwFlags;
+        unsigned short wShowWindow;
+        unsigned short cbReserved2;
+        unsigned char* lpReserved2;
+        void* hStdInput;
+        void* hStdOutput;
+        void* hStdError;
+    } STARTUPINFOA;
+
+    typedef struct _PROCESS_INFORMATION {
+        void* hProcess;
+        void* hThread;
+        unsigned long dwProcessId;
+        unsigned long dwThreadId;
+    } PROCESS_INFORMATION;
+
+    bool CreateProcessA(
+        const char* lpApplicationName,
+        char* lpCommandLine,
+        void* lpProcessAttributes,
+        void* lpThreadAttributes,
+        bool bInheritHandles,
+        unsigned long dwCreationFlags,
+        void* lpEnvironment,
+        const char* lpCurrentDirectory,
+        STARTUPINFOA* lpStartupInfo,
+        PROCESS_INFORMATION* lpProcessInformation
+    );
+
+    unsigned long WaitForSingleObject(void* hHandle, unsigned long dwMilliseconds);
+    bool CloseHandle(void* hObject);
+" } as "kernel32"
+
+fn run_process(cmd) {
+    var si = ffi.new("STARTUPINFOA")
+    si.cb = ffi.sizeof(si)
+
+    var pi = ffi.new("PROCESS_INFORMATION")
+
+    var cmd_buf = ffi.new("char[?]", cmd::len() + 1, cmd)
+
+    var success = kernel32.CreateProcessA(
+        ffi.NULL,
+        cmd_buf,
+        ffi.NULL,
+        ffi.NULL,
+        true,
+        0,
+        ffi.NULL,
+        ffi.NULL,
+        si,
+        pi
+    )
+
+    if success {
+        kernel32.WaitForSingleObject(pi.hProcess, 4294967295)
+
+        kernel32.CloseHandle(pi.hProcess)
+        kernel32.CloseHandle(pi.hThread)
+        return true
+    }
+    return false
+}

@@ -1,0 +1,431 @@
+// ============================================================================
+// 1. ПОДКЛЮЧЕНИЕ FFI (USER32, KERNEL32, GDI32)
+// ============================================================================
+usec "user32.dll" {
+"
+    typedef void* HWND; typedef void* HMENU; typedef void* HINSTANCE;
+    typedef void* HICON; typedef void* HCURSOR; typedef void* HBRUSH;
+    typedef unsigned int UINT; typedef unsigned long DWORD;
+    typedef long long LRESULT; typedef unsigned long long WPARAM;
+    typedef long long LPARAM; typedef void* HDC;
+
+    typedef LRESULT (*WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+
+    typedef struct _WNDCLASSEXA {
+        UINT cbSize; UINT style; WNDPROC lpfnWndProc; int cbClsExtra; int cbWndExtra;
+        HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground;
+        const char* lpszMenuName; const char* lpszClassName; HICON hIconSm;
+    } WNDCLASSEXA;
+    typedef struct _POINT { long x; long y; } POINT;
+    typedef struct _MSG {
+        HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam;
+        DWORD time; POINT pt; DWORD lPrivate;
+    } MSG;
+
+    unsigned short RegisterClassExA(const WNDCLASSEXA*);
+    HWND CreateWindowExA(DWORD dwExStyle, const char* lpClassName, const char* lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, void* lpParam);
+    int ShowWindow(HWND hWnd, int nCmdShow);
+    int UpdateWindow(HWND hWnd);
+    int GetMessageA(MSG* lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax);
+    int TranslateMessage(const MSG* lpMsg);
+    LRESULT DispatchMessageA(const MSG* lpMsg);
+    LRESULT DefWindowProcA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+    void PostQuitMessage(int nExitCode);
+    int SetWindowTextA(HWND hWnd, const char* lpString);
+    int GetWindowTextA(HWND hWnd, char* lpString, int nMaxCount);
+    int MoveWindow(HWND hWnd, int X, int Y, int nWidth, int nHeight, int bRepaint);
+    int DestroyWindow(HWND hWnd);
+    LRESULT SendMessageA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+    HBRUSH GetSysColorBrush(int nIndex);
+    int InvalidateRect(HWND hWnd, void* lpRect, int bErase);
+"
+} as "user32"
+
+usec "kernel32.dll" { "void* GetModuleHandleA(const char* lpModuleName);" } as "kernel32"
+
+usec "gdi32.dll" {
+"
+    typedef void* HFONT;
+    typedef unsigned long COLORREF;
+    HFONT CreateFontA(int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight, DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet, DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily, const char* pszFaceName);
+    COLORREF SetTextColor(void* hdc, COLORREF color);
+    int SetBkMode(void* hdc, int mode);
+    int DeleteObject(void* hObject);
+"
+} as "gdi32"
+
+// ============================================================================
+// 2. ДВИЖОК СТИЛЕЙ И ШРИФТОВ (THEME ENGINE)
+// ============================================================================
+fn rgb(r, g, b) { ret r + (g * 256) + (b * 65536) }
+
+var font_cache = {}
+fn get_font(size, is_bold, is_italic, name) {
+    if size == nil { size = 16 }
+    if is_bold == nil { is_bold = false }
+    if is_italic == nil { is_italic = false }
+    if name == nil { name = "Segoe UI" }
+
+    var cache_key = name .. "_" .. size .. "_" .. tostring(is_bold) .. "_" .. tostring(is_italic)
+    if font_cache[cache_key] != nil { ret font_cache[cache_key] }
+
+    var weight = 400
+    if is_bold { weight = 700 }
+    var italic_flag = 0
+    if is_italic { italic_flag = 1 }
+
+    var font = gdi32.CreateFontA(-size, 0, 0, 0, weight, italic_flag, 0, 0, 1, 0, 0, 5, 0, name)
+    font_cache[cache_key] = font
+    ret font
+}
+
+// ============================================================================
+// 3. DSL ВИРТУАЛЬНОГО ДЕРЕВА (VNODE) С ПОДДЕРЖКОЙ KEY
+// ============================================================================
+var next_id = 1
+fn gen_id() { var id = next_id; next_id = next_id + 1; ret id }
+
+fn vnode(type, props, children) {
+    if props == nil { props = {} }
+    if children == nil { children = [] }
+    // Ключевой момент: если ключ не задан явно, генерируем его для стабильности
+    if props.key == nil { props.key = "auto_" .. gen_id() }
+    ret { type: type, props: props, children: children, id: props.key }
+}
+
+fn column(props, children) {
+    if children == nil { ret vnode("column", {}, props) }
+    ret vnode("column", props, children)
+}
+fn row(props, children) {
+    if children == nil { ret vnode("row", {}, props) }
+    ret vnode("row", props, children)
+}
+fn text(content, props) {
+    if props == nil { props = {} }
+    props.text = tostring(content)
+    ret vnode("text", props, [])
+}
+fn button(label, on_click, props) {
+    if props == nil { props = {} }
+    props.text = tostring(label)
+    props.on_click = on_click
+    ret vnode("button", props, [])
+}
+fn input(text_val, on_change, props) {
+    if props == nil { props = {} }
+    props.text = tostring(text_val)
+    props.on_change = on_change
+    ret vnode("input", props, [])
+}
+
+// --- НОВЫЕ ВИДЖЕТЫ ---
+fn checkbox(label, on_change, props) {
+    if props == nil { props = {} }
+    props.text = tostring(label)
+    props.on_change = on_change
+    ret vnode("checkbox", props, [])
+}
+
+fn slider(min_val, max_val, value, on_change, props) {
+    if props == nil { props = {} }
+    props.min = min_val
+    props.max = max_val
+    props.value = value
+    props.on_change = on_change
+    ret vnode("slider", props, [])
+}
+
+fn card(props, children) {
+    if props == nil { props = {} }
+    if props.bg_color == nil { props.bg_color = rgb(245, 245, 245) }
+    if props.padding == nil { props.padding = 15 }
+    ret vnode("card", props, children)
+}
+
+// ============================================================================
+// 4. ДВИЖОК КОМПОНОВКИ (FLEX LAYOUT)
+// ============================================================================
+fn layout(vnode, x, y, w, h) {
+    var node = { vnode: vnode, x: x, y: y, w: w, h: h, children: [] }
+    var pad = 10
+    if vnode.props.padding != nil { pad = vnode.props.padding }
+    var spacing = 8
+    if vnode.props.spacing != nil { spacing = vnode.props.spacing }
+
+    var ix = x + pad; var iy = y + pad;
+    var iw = w - pad * 2; var ih = h - pad * 2;
+    var count = vnode.children::len()
+    if count == 0 { ret node }
+
+    var total_weight = 0
+    var fixed_size = 0
+    for child in vnode.children {
+        if child.props.weight != nil { total_weight = total_weight + child.props.weight }
+        else {
+            if vnode.type == "column" { fixed_size = fixed_size + (child.props.height | 40) }
+            else { fixed_size = fixed_size + (child.props.width | 100) }
+        }
+    }
+
+    var flex_space = 0
+    if vnode.type == "column" { flex_space = ih - fixed_size - (spacing * (count - 1)) }
+    else { flex_space = iw - fixed_size - (spacing * (count - 1)) }
+    if flex_space < 0 { flex_space = 0 }
+
+    var curr_x = ix; var curr_y = iy;
+    for child in vnode.children {
+        var cw = iw; var ch = ih;
+        if vnode.type == "column" {
+            if child.props.weight != nil { ch = (flex_space * child.props.weight) / total_weight }
+            else { ch = child.props.height | 40 }
+            node.children::push(layout(child, ix, curr_y, iw, ch))
+            curr_y = curr_y + ch + spacing
+        } else {
+            if child.props.weight != nil { cw = (flex_space * child.props.weight) / total_weight }
+            else { cw = child.props.width | 100 }
+            node.children::push(layout(child, curr_x, iy, cw, ih))
+            curr_x = curr_x + cw + spacing
+        }
+    }
+    ret node
+}
+
+// ============================================================================
+// 5. РЕЕСТРЫ И ОБРАБОТЧИК СОБЫТИЙ (WNDPROC)
+// ============================================================================
+var click_handlers = {}
+var change_handlers = {}
+var node_registry = {}
+
+var global_wndproc = ffi.cast("WNDPROC", fn(hwnd, msg, wparam, lparam) {
+    if msg == 2 { // WM_DESTROY
+        user32.PostQuitMessage(0)
+        ret 0
+    }
+
+    // WM_CTLCOLORSTATIC: Раскрашиваем текст
+    if msg == 312 {
+        var hdc = ffi.cast("HDC", wparam)
+        var child_hwnd = ffi.cast("HWND", lparam)
+        var v = node_registry[tostring(child_hwnd)]
+        if v != nil & v.props.color != nil {
+            gdi32.SetTextColor(hdc, v.props.color)
+        }
+        gdi32.SetBkMode(hdc, 1) // ПРОЗРАЧНЫЙ ФОН
+        ret ffi.cast("LRESULT", user32.GetSysColorBrush(15))
+    }
+
+    // WM_COMMAND: Кнопки, инпуты, чекбоксы
+    if msg == 273 {
+        var child_hwnd = ffi.cast("HWND", lparam)
+        var key = tostring(child_hwnd)
+        var wp_num = tonumber(wparam)
+        var notification = math.floor(wp_num / 65536)
+
+        if notification == 0 { // BN_CLICKED
+            var handler = click_handlers[key]
+            if handler != nil { handler() }
+
+            // Специальная обработка для чекбокса
+            var v = node_registry[key]
+            if v != nil & v.type == "checkbox" & v.props.on_change != nil {
+                var state = user32.SendMessageA(child_hwnd, 0x00F0, 0, 0) // BM_GETCHECK
+                v.props.on_change(state == 1)
+            }
+        }
+        elif notification == 768 { // EN_CHANGE
+            var handler = change_handlers[key]
+            if handler != nil {
+                var buffer = ffi.new("char[1024]")
+                user32.GetWindowTextA(child_hwnd, buffer, 1024)
+                handler(ffi.string(buffer))
+            }
+        }
+    }
+
+    // WM_HSCROLL / WM_VSCROLL: Ползунки (Slider)
+    if msg == 0x0114 | msg == 0x0115 {
+        var child_hwnd = ffi.cast("HWND", lparam)
+        if child_hwnd != ffi.NULL {
+            var key = tostring(child_hwnd)
+            var handler = change_handlers[key]
+            if handler != nil {
+                var pos = user32.SendMessageA(child_hwnd, 1024, 0, 0) // TBM_GETPOS
+                handler(pos)
+            }
+        }
+    }
+
+    ret user32.DefWindowProcA(hwnd, msg, wparam, lparam)
+})
+
+// ============================================================================
+// 6. PATCH ENGINE (РЕКОНСИЛЯЦИЯ VDOM С ЧАСТИЧНЫМ ОБНОВЛЕНИЕМ)
+// ============================================================================
+fn apply_styles(hwnd, v) {
+    var key = tostring(hwnd)
+    node_registry[key] = v
+    var font = get_font(v.props.size, v.props.bold, v.props.italic, v.props.font)
+    user32.SendMessageA(hwnd, 48, ffi.cast("WPARAM", font), ffi.cast("LPARAM", 1)) // WM_SETFONT
+}
+
+fn patch(parent, old_node, new_node) {
+    // 1. УНИЧТОЖЕНИЕ (Unmount)
+    if new_node == nil {
+        if old_node != nil & old_node.hwnd != nil {
+            var key = tostring(old_node.hwnd)
+            // Вызов хука жизненного цикла
+            if old_node.vnode.props.on_unmount != nil {
+                old_node.vnode.props.on_unmount(old_node.hwnd)
+            }
+            // Очистка реестров
+            click_handlers[key] = nil
+            change_handlers[key] = nil
+            node_registry[key] = nil
+
+            user32.DestroyWindow(old_node.hwnd)
+        }
+        ret nil
+    }
+
+    // 2. СОЗДАНИЕ (Mount) - если старого нет, или изменился тип, или изменился key
+    if old_node == nil | old_node.vnode.type != new_node.vnode.type | old_node.vnode.props.key != new_node.vnode.props.key {
+        if old_node != nil & old_node.hwnd != nil {
+            patch(parent, old_node, nil) // Корректно уничтожаем старый
+        }
+
+        var v = new_node.vnode
+        var hwnd = nil
+        var hInst = kernel32.GetModuleHandleA(ffi.NULL)
+
+        if v.type == "button" {
+            hwnd = user32.CreateWindowExA(0, "BUTTON", v.props.text, 0x50000000, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+        } elif v.type == "text" {
+            var style = 0x50000000; if v.props.align == "center" { style = 0x50000001 }
+            hwnd = user32.CreateWindowExA(0, "STATIC", v.props.text, style, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+        } elif v.type == "input" {
+            hwnd = user32.CreateWindowExA(0x200, "EDIT", v.props.text, 0x50010080, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+        } elif v.type == "checkbox" {
+            hwnd = user32.CreateWindowExA(0, "BUTTON", v.props.text, 0x50010003, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+        } elif v.type == "slider" {
+            hwnd = user32.CreateWindowExA(0, "msctls_trackbar32", "", 0x50010000, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+            if v.props.value != nil { user32.SendMessageA(hwnd, 1024, 0, v.props.value) } // TBM_SETPOS
+        } elif v.type == "card" {
+            hwnd = user32.CreateWindowExA(0, "STATIC", "", 0x50000000, new_node.x, new_node.y, new_node.w, new_node.h, parent, ffi.NULL, hInst, ffi.NULL)
+        }
+
+        if hwnd != nil {
+            new_node.hwnd = hwnd
+            var key = tostring(hwnd)
+
+            // Вызов хука жизненного цикла
+            if v.props.on_mount != nil { v.props.on_mount(hwnd) }
+
+            apply_styles(hwnd, v)
+
+            // Регистрация обработчиков
+            if v.type == "button" & v.props.on_click != nil { click_handlers[key] = v.props.on_click }
+            if (v.type == "input" | v.type == "checkbox" | v.type == "slider") & v.props.on_change != nil {
+                change_handlers[key] = v.props.on_change
+            }
+
+            // Рекурсивный маунт детей
+            for child in new_node.children { patch(hwnd, nil, child) }
+        }
+        ret new_node
+    }
+
+    // 3. ЧАСТИЧНОЕ ОБНОВЛЕНИЕ (Update) - HWND сохраняется!
+    new_node.hwnd = old_node.hwnd
+    var v = new_node.vnode
+    var hwnd = new_node.hwnd
+    var key = tostring(hwnd)
+
+    // Обновление геометрии (без пересоздания)
+    if new_node.x != old_node.x | new_node.y != old_node.y | new_node.w != old_node.w | new_node.h != old_node.h {
+        user32.MoveWindow(hwnd, new_node.x, new_node.y, new_node.w, new_node.h, 1)
+    }
+
+    // Обновление текста (только если изменился и это не input, чтобы не сбивать фокус)
+    if v.props.text != old_node.vnode.props.text & v.type != "input" {
+        user32.SetWindowTextA(hwnd, v.props.text)
+    }
+
+    // Обновление обработчиков (только если ссылка на функцию изменилась)
+    if v.type == "button" & v.props.on_click != old_node.vnode.props.on_click {
+        click_handlers[key] = v.props.on_click
+    }
+    if (v.type == "input" | v.type == "checkbox" | v.type == "slider") & v.props.on_change != old_node.vnode.props.on_change {
+        change_handlers[key] = v.props.on_change
+    }
+
+    apply_styles(hwnd, v)
+
+    // 4. РЕКОНСИЛЯЦИЯ ДЕТЕЙ С ИСПОЛЬЗОВАНИЕМ KEY
+    var old_children = old_node.children
+    var new_children = new_node.children
+    var n_children = []
+
+    // Создаем карту старых детей по key для быстрого поиска O(1)
+    var old_map = {}
+    for i = 0, old_children::len() - 1, 1 {
+        if old_children[i] != nil {
+            old_map[tostring(old_children[i].vnode.props.key)] = old_children[i]
+        }
+    }
+
+    for i = 0, new_children::len() - 1, 1 {
+        var new_child = new_children[i]
+        var child_key = tostring(new_child.vnode.props.key)
+        var old_child = old_map[child_key]
+
+        var patched_child = patch(hwnd, old_child, new_child)
+        if patched_child != nil {
+            n_children::push(patched_child)
+            old_map[child_key] = nil // Помечаем как обработанного
+        }
+    }
+
+    // Уничтожаем "осиротевшие" узлы, которых нет в новом дереве
+    for k, orphan in pairs(old_map) {
+        patch(hwnd, orphan, nil)
+    }
+
+    new_node.children = n_children
+    ret new_node
+}
+
+// ============================================================================
+// 7. WINDOW MANAGER
+// ============================================================================
+fn window(title, config) {
+    var width = 500; if config.width != nil { width = config.width }
+    var height = 400; if config.height != nil { height = config.height }
+
+    var hInstance = kernel32.GetModuleHandleA(ffi.NULL)
+    var wc = ffi.new("WNDCLASSEXA")
+    wc.cbSize = ffi.sizeof("WNDCLASSEXA")
+    wc.lpfnWndProc = global_wndproc
+    wc.hInstance = hInstance
+    wc.hbrBackground = user32.GetSysColorBrush(15)
+    wc.lpszClassName = "LimeUIApp"
+    user32.RegisterClassExA(wc)
+
+    var hwnd = user32.CreateWindowExA(0, "LimeUIApp", title, 0x00CF0000, -2147483648, -2147483648, width, height, ffi.NULL, ffi.NULL, hInstance, ffi.NULL)
+
+    var current_tree = nil
+    watch(fn() {
+        var tree = config.render()
+        var laid = layout(tree, 0, 0, width - 16, height - 39)
+        // Частичное обновление: UpdateWindow больше не нужен, MoveWindow/SetWindowText сами вызывают InvalidateRect
+        current_tree = patch(hwnd, current_tree, laid)
+    })
+
+    user32.ShowWindow(hwnd, 5)
+    var msg = ffi.new("MSG")
+    loop user32.GetMessageA(msg, ffi.NULL, 0, 0) > 0 {
+        user32.TranslateMessage(msg)
+        user32.DispatchMessageA(msg)
+    }
+}
