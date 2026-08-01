@@ -1,0 +1,292 @@
+usec "raylib.dll" { "
+    typedef struct Color {
+        unsigned char r;
+        unsigned char g;
+        unsigned char b;
+        unsigned char a;
+    } Color;
+
+    typedef struct Vector2 { float x; float y; } Vector2;
+    typedef struct Vector3 { float x; float y; float z; } Vector3;
+
+    typedef struct Camera3D {
+        Vector3 position;
+        Vector3 target;
+        Vector3 up;
+        float fovy;
+        int projection;
+    } Camera3D;
+
+    // --- Input ---
+    bool IsKeyDown(int key);
+    bool IsKeyPressed(int key);
+    Vector2 GetMousePosition(void);
+    bool IsMouseButtonPressed(int button);
+
+    // --- 2D Graphics ---
+    void InitWindow(int width, int height, const char* title);
+    bool WindowShouldClose(void);
+    void CloseWindow(void);
+    void SetTargetFPS(int fps);
+    void BeginDrawing(void);
+    void EndDrawing(void);
+    void ClearBackground(Color color);
+    void DrawRectangle(int posX, int posY, int width, int height, Color color);
+    void DrawText(const char* text, int posX, int posY, int fontSize, Color color);
+
+    // Textures
+    typedef struct Texture2D { unsigned int id; int width; int height; } Texture2D;
+    Texture2D LoadTexture(const char* fileName);
+    void DrawTexture(Texture2D texture, int posX, int posY, Color tint);
+    void DrawTextureEx(Texture2D texture, Vector2 position, float rotation, float scale, Color tint);
+    void UnloadTexture(Texture2D texture);
+
+    // --- Fonts ---
+    typedef struct Font Font;
+    Font* LoadFont(const char* fileName);
+    void DrawTextEx(Font font, const char* text, Vector2 position, float fontSize, float spacing, Color tint);
+
+    // --- 3D Graphics ---
+    void BeginMode3D(Camera3D camera);
+    void EndMode3D(void);
+    void DrawCube(Vector3 position, float width, float height, float length, Color color);
+    void DrawGrid(int slices, float spacing);
+
+    // --- Collisions ---
+    bool CheckCollisionRecs(float x1, float y1, float w1, float h1,
+                            float x2, float y2, float w2, float h2);
+
+    // Sounds
+    typedef struct Sound { void* data; int stream; } Sound;
+    typedef struct Music { void* data; int stream; } Music;
+
+    void InitAudioDevice(void);
+    void CloseAudioDevice(void);
+    Sound LoadSound(const char* fileName);
+    void PlaySound(Sound sound);
+    void StopSound(Sound sound);
+    void UnloadSound(Sound sound);
+    Music LoadMusicStream(const char* fileName);
+    void PlayMusicStream(Music music);
+    void UpdateMusicStream(Music music);
+    void UnloadMusicStream(Music music);
+
+    // Time
+    double GetTime(void);
+    void WaitTime(double seconds);
+" } as "rl"
+
+struct Color {
+    r: i
+    g: i
+    b: i
+    a: i
+}
+
+var Colors = {
+    "BLACK": Color(0, 0, 0, 255),
+    "WHITE": Color(255, 255, 255, 255),
+    "RED":   Color(255, 0, 0, 255),
+    "GREEN": Color(0, 255, 0, 255),
+    "BLUE":  Color(0, 0, 255, 255)
+}
+
+
+struct Window {
+    width: i
+    height: i
+    title: s
+}
+
+var Keys = {
+    "RIGHT": 262, "LEFT": 263, "DOWN": 264, "UP": 265,
+    "SPACE": 32, "ENTER": 257, "ESCAPE": 256,
+    "W": 87, "A": 65, "S": 83, "D": 68
+}
+
+var math = {
+    "vec2": fn(x, y) { ret ffi.new("Vector2", x, y) },
+    "vec3": fn(x, y, z) { ret ffi.new("Vector3", x, y, z) },
+
+    "add": fn(a, b) { ret [a[0] + b[0], a[1] + b[1]] },
+    "sub": fn(a, b) { ret [a[0] - b[0], a[1] - b[1]] },
+    "scale": fn(v, s) { ret [v[0] * s, v[1] * s] },
+    "length": fn(v) { ret sqrt(v[0]^2 + v[1]^2) },
+    "normalize": fn(v) {
+        var len = sqrt(v[0]^2 + v[1]^2)
+        ret [v[0] / len, v[1] / len]
+    },
+    "lerp": fn(a, b, t) { ret [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t] }
+}
+
+var draw3d = {
+    "begin": fn(camera) {
+        rl.BeginMode3D(camera)
+    },
+
+    "end_": fn() {
+        rl.EndMode3D()
+    },
+
+    "cube": fn(x, y, z, w, h, l, color) {
+        rl.DrawCube(math3d.vec3(x, y, z), w, h, l, color)
+    },
+
+    "grid": fn(slices, spacing) {
+        rl.DrawGrid(slices, spacing)
+    }
+}
+
+var physics = {
+    "check_rect_collision": fn(rect1_x, rect1_y, rect1_w, rect1_h,
+                               rect2_x, rect2_y, rect2_w, rect2_h) {
+        ret rl.CheckCollisionRecs(
+            rect1_x, rect1_y, rect1_w, rect1_h,
+            rect2_x, rect2_y, rect2_w, rect2_h
+        ) == true
+    },
+    "check_circle_collision": fn(x1, y1, r1, x2, y2, r2) {
+        var dx = x1 - x2
+        var dy = y1 - y2
+        ret sqrt(dx*dx + dy*dy) < r1 + r2
+    },
+
+    "check_point_in_rect": fn(px, py, rx, ry, rw, rh) {
+        ret px >= rx & px <= rx + rw & py >= ry & py <= ry + rh
+    }
+}
+
+var scenes = {
+    "current": nil,
+    "add": fn(name, scene) {
+        scenes[name] = scene
+    },
+    "switch": fn(name) {
+        if scenes.current != nil {
+            scenes.current.on_exit()
+        }
+        scenes.current = scenes[name]
+        scenes.current.on_enter()
+    },
+    "update": fn() {
+        if scenes.current != nil {
+            scenes.current.update()
+        }
+    },
+    "draw": fn() {
+        if scenes.current != nil {
+            scenes.current.draw()
+        }
+    }
+}
+
+var input = {
+    "is_key_down": fn(key_code) {
+        ret rl.IsKeyDown(key_code) == true
+    },
+
+    "is_key_pressed": fn(key_code) {
+        ret rl.IsKeyPressed(key_code) == true
+    },
+
+    "is_mouse_pressed": fn(btn) {
+        ret rl.IsMouseButtonPressed(btn) == true
+    },
+
+    "mouse_pos": fn() {
+        var pos = rl.GetMousePosition()
+        ret [pos.x, pos.y]
+    }
+}
+
+var display = {
+    "init": fn(width, height, title) {
+        rl.InitWindow(width, height, title)
+    },
+
+    "set_fps": fn(fps) {
+        rl.SetTargetFPS(fps)
+    },
+
+    "update": fn() {
+        rl.EndDrawing()
+    },
+
+    "is_running": fn() {
+        ret rl.WindowShouldClose() == false
+    },
+
+    "quit": fn() {
+        rl.CloseWindow()
+    }
+}
+
+var draw = {
+    "begin": fn() {
+        rl.BeginDrawing()
+    },
+
+    "clear": fn(color) {
+        rl.ClearBackground(color)
+    },
+
+    "rect": fn(x, y, w, h, color) {
+        rl.DrawRectangle(x, y, w, h, color)
+    },
+
+    "text": fn(txt, x, y, size, color) {
+        rl.DrawText(txt, x, y, size, color)
+    }
+}
+
+var textures = {
+    "load": fn(path) { ret rl.LoadTexture(path) },
+    "draw": fn(tex, x, y, color) { rl.DrawTexture(tex, x, y, color) },
+    "draw_ex": fn(tex, x, y, rot, scale, color) {
+        rl.DrawTextureEx(tex, vec2(x, y), rot, scale, color)
+    },
+    "unload": fn(tex) { rl.UnloadTexture(tex) }
+}
+
+var audio = {
+    "init": fn() { rl.InitAudioDevice() },
+    "close": fn() { rl.CloseAudioDevice() },
+    "sound_load": fn(path) { ret rl.LoadSound(path) },
+    "sound_play": fn(snd) { rl.PlaySound(snd) },
+    "music_load": fn(path) { ret rl.LoadMusicStream(path) },
+    "music_play": fn(music) { rl.PlayMusicStream(music) },
+    "music_update": fn(music) { rl.UpdateMusicStream(music) }
+}
+
+var time = {
+    "now": fn() { ret rl.GetTime() },
+    "wait": fn(sec) { rl.WaitTime(sec) },
+    "delta": fn() {
+        var last = 0
+        var current = rl.GetTime()
+        var dt = current - last
+        last = current
+        ret dt
+    }
+}
+
+var ecs = {
+    "create": fn() {
+        ret { "id": new_id(), "components": {} }
+    },
+    "add": fn(entity, component_name, data) {
+        entity.components[component_name] = data
+    },
+    "get": fn(entity, component_name) {
+        ret entity.components[component_name]
+    },
+    "query": fn(component_name) {
+        var result = []
+        for entity in entities {
+            if entity.components[component_name] != nil {
+                result.push(entity)
+            }
+        }
+        ret result
+    }
+}
