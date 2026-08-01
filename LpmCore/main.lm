@@ -1,0 +1,379 @@
+use "cmd"
+use "nicehttp"
+use "fs"
+
+os = defpyt("os")
+
+var path = os.getcwd()
+var github_token = "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"
+
+// ═══════════════════════════════════════════════
+//  C-функции для бинарной записи файлов
+//  (Python builtins.open ломает бинарник из-за
+//   Lupa UTF-8 конверсии Lua string → Python str)
+// ═══════════════════════════════════════════════
+ffi.cdef("void* fopen(const char* path, const char* mode);")
+ffi.cdef("size_t fwrite(const void* ptr, size_t size, size_t nmemb, void* stream);")
+ffi.cdef("int fclose(void* stream);")
+
+fn write_binary(filepath, data) {
+    var f = ffi.C.fopen(filepath, "wb")
+    if f == ffi.NULL {
+        error("[LPM] Cannot open file for writing: " .. filepath)
+    }
+    ffi.C.fwrite(data, 1, #data, f)
+    ffi.C.fclose(f)
+}
+
+// ═══════════════════════════════════════════════
+//  split
+// ═══════════════════════════════════════════════
+fn split(self, sep) {
+    var result = []
+    var start = 1
+    loop true {
+        var pos = string.find(self, sep, start, true)
+        if pos == nil {
+            result::add(string.sub(self, start))
+            stop
+        }
+        result::add(string.sub(self, start, pos - 1))
+        start = pos + #sep
+    }
+    ret result
+}
+
+// ═══════════════════════════════════════════════
+//  Парсинг GitHub /tree/ URL
+// ═══════════════════════════════════════════════
+fn parse_github_tree_url(url) {
+    var parts = split(url, "/")
+    var owner  = parts[3]
+    var repo   = parts[4]
+    var branch = parts[6]
+
+    var pkg_path = ""
+    for i = 7, parts::len() - 1, 1 {
+        if pkg_path != "" {
+            pkg_path = pkg_path .. "/"
+        }
+        pkg_path = pkg_path .. parts[i]
+    }
+
+    ret { "owner": owner, "repo": repo, "branch": branch, "path": pkg_path }
+}
+
+// ═══════════════════════════════════════════════
+//  Мини-парсер JSON из GitHub API
+//  Ищет все "name":"..." и "type":"..." по порядку.
+//  Работает и с пробелами: "type" : "dir"
+// ═══════════════════════════════════════════════
+fn extract_json_values(body, key) {
+    var result = []
+    var search = "\"" .. key .. "\""
+    var start = 1
+
+    loop true {
+        var pos = string.find(body, search, start, true)
+        if pos == nil { stop }
+
+        // Позиция после "key"
+        var i = pos + #search
+
+        // Пропускаем пробелы, двоеточие, пробелы
+        loop true {
+            var ch = string.sub(body, i, i)
+            if ch == ":" {
+                i = i + 1
+                stop
+            }
+            if ch != " " & ch != "\t" & ch != "\n" & ch != "\r" {
+                stop
+            }
+            i = i + 1
+        }
+
+        // Пропускаем пробелы после двоеточия
+        loop true {
+            var ch = string.sub(body, i, i)
+            if ch != " " & ch != "\t" & ch != "\n" & ch != "\r" {
+                stop
+            }
+            i = i + 1
+        }
+
+        // Ожидаем открывающую кавычку значения
+        if string.sub(body, i, i) == "\"" {
+            i = i + 1
+            var val_end = string.find(body, "\"", i, true)
+            if val_end != nil {
+                result::add(string.sub(body, i, val_end - 1))
+                start = val_end + 1
+            } else {
+                stop
+            }
+        } else {
+            // Значение не строка (число, bool) — пропускаем
+            start = pos + #search
+        }
+    }
+
+    ret result
+}
+
+fn parse_entries(body) {
+    var names = extract_json_values(body, "name")
+    var types = extract_json_values(body, "type")
+
+    var result = []
+    var n = names::len()
+    for i = 0, n - 1, 1 {
+        if i < types::len() {
+            result::add({ "name": names[i], "type": types[i] })
+        }
+    }
+    ret result
+}
+
+// ═══════════════════════════════════════════════
+//  Доустановка содержимого libs/
+//  dir  → рекурсивный install_package
+//  file → скачать напрямую в ./libs/
+// ═══════════════════════════════════════════════
+fn install_sub_libs(owner, repo, branch, pkg_path) {
+    var api_url = "https://api.github.com/repos/"
+        .. owner .. "/" .. repo
+        .. "/contents/" .. pkg_path .. "/libs"
+        .. "?ref=" .. branch
+
+    print("[LPM] Checking: " .. api_url)
+
+    // Строим заголовки
+    var headers = { "User-Agent": "LimeLPM" }
+    if github_token != "" {
+        headers["Authorization"] = "Bearer " .. github_token
+        print("[LPM] Using GitHub token for API request")
+    }
+
+    var response = get(api_url, headers)
+
+    if response.status != 200 {
+        print("[LPM] No libs/ folder (HTTP " .. response.status .. ")")
+        ret nil
+    }
+
+    var entries = parse_entries(response.body)
+    var total = entries::len()
+
+    if total == 0 {
+        print("[LPM] libs/ is empty")
+        ret nil
+    }
+
+    print("[LPM] Found " .. total .. " item(s) in libs/")
+
+    for i = 0, total - 1, 1 {
+        var entry = entries[i]
+        var name = entry.name
+        var typ  = entry.type
+
+        if typ == "dir" {
+            var sub_url = "https://github.com/"
+                .. owner .. "/" .. repo
+                .. "/tree/" .. branch .. "/"
+                .. pkg_path .. "/libs/" .. name
+
+            print("[LPM] Sub-library: " .. name)
+            install_package(sub_url)
+
+        } elif typ == "file" {
+            var file_url = "https://raw.githubusercontent.com/"
+                .. owner .. "/" .. repo
+                .. "/" .. branch .. "/"
+                .. pkg_path .. "/libs/" .. name
+
+            var file_resp = get(file_url)
+
+            if file_resp.status == 200 {
+                var dest = "./libs/" .. name
+                write(dest, file_resp.body)
+                print("[LPM] Downloaded: " .. name)
+            } else {
+                print("[LPM] Warning: failed to download " .. name)
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════
+//  Парсинг аргументов
+// ═══════════════════════════════════════════════
+var cmds = []
+var last_cmd = ""
+var l_args = []
+
+for i in args {
+    if i::startswith("--") {
+        if last_cmd != "" {
+            cmds::add({ "name": last_cmd, "args": l_args })
+        }
+        last_cmd = i
+        l_args = []
+    } else {
+        l_args::add(i)
+    }
+}
+
+if last_cmd != "" {
+    cmds::add({ "name": last_cmd, "args": l_args })
+}
+
+// ═══════════════════════════════════════════════
+//  lime.toml
+// ═══════════════════════════════════════════════
+fn add_dependency_to_config(pkg_name) {
+    if exists("./lime.toml") {
+        var content = read("./lime.toml")["data"]
+        if !content::contains(pkg_name) {
+            var updated = content .. "\n" .. pkg_name .. " = \"latest\""
+            write("./lime.toml", updated)
+            print("[LPM] Updated lime.toml with " .. pkg_name)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════
+//  Установка пакета
+// ═══════════════════════════════════════════════
+fn install_package(pkg_name) {
+    print("[LPM] Installing " .. pkg_name .. "...")
+
+    if !exists("./libs") {
+        mkdir("./libs")
+    }
+
+    var clean_name = split(pkg_name, "/")::last()
+    var pkg_dir = "./libs/" .. clean_name
+
+    // ── 1. GitHub /tree/ → setup.lm + вложенные libs/ ──
+    if pkg_name::contains("github.com") & pkg_name::contains("/tree/") {
+        var info = parse_github_tree_url(pkg_name)
+
+        var download_url = "https://raw.githubusercontent.com/"
+            .. info.owner .. "/" .. info.repo
+            .. "/" .. info.branch .. "/"
+            .. info.path .. "/setup.lm"
+
+        var headers = { "User-Agent": "LimeLPM" }
+        if github_token != "" {
+            headers["Authorization"] = "Bearer " .. github_token
+            print("[LPM] Using GitHub token for API request")
+        }
+
+        var response = get(download_url, headers)
+        if response.status == 200 {
+            if !exists(pkg_dir) {
+                mkdir(pkg_dir)
+            }
+            var target_path = pkg_dir .. "/setup.lm"
+            write(target_path, response.body)
+            print("[LPM] Successfully installed " .. clean_name .. " to " .. target_path)
+            add_dependency_to_config(pkg_name)
+
+            install_sub_libs(info.owner, info.repo, info.branch, info.path)
+        } else {
+            error("[LPM] Failed to download 'setup.lm'. HTTP Status: " .. response.status)
+        }
+    }
+    // ── 2. GitHub repo (owner/name) или прямой .zip ──
+    elif (pkg_name::contains("/") & !pkg_name::startswith("http")) | pkg_name::endswith(".zip") {
+        var download_url = ""
+        if pkg_name::endswith(".zip") {
+            download_url = pkg_name
+        } else {
+            download_url = "https://github.com/" .. pkg_name .. "/archive/refs/heads/main.zip"
+        }
+
+        var temp_zip = "./libs/temp_" .. clean_name .. ".zip"
+        var response = get(download_url)
+
+        if response.status == 200 {
+            write_binary(temp_zip, response.body)
+
+            var zipfile = defpyt("zipfile")
+            var shutil  = defpyt("shutil")
+
+            var zip_ref = zipfile.ZipFile(temp_zip, "r")
+            var temp_extract_path = "./libs/temp_ext_" .. clean_name
+            zip_ref.extractall(temp_extract_path)
+            zip_ref.close()
+            os.remove(temp_zip)
+
+            var extracted_folders = os.listdir(temp_extract_path)
+            if #extracted_folders > 0 {
+                var inner_folder = temp_extract_path .. "/" .. extracted_folders[0]
+
+                if exists(pkg_dir) {
+                    shutil.rmtree(pkg_dir)
+                }
+                shutil.move(inner_folder, pkg_dir)
+                shutil.rmtree(temp_extract_path)
+            }
+
+            print("[LPM] Successfully extracted package to " .. pkg_dir)
+            add_dependency_to_config(pkg_name)
+        } else {
+            error("[LPM] Failed to download ZIP. HTTP Status: " .. response.status)
+        }
+    }
+    // ── 3. Прямая ссылка на файл ──
+    else {
+        var response = get(pkg_name)
+        if response.status == 200 {
+            var target_path = "./libs/" .. clean_name
+            if !target_path::endswith(".lm") {
+                target_path = target_path .. ".lm"
+            }
+            write(target_path, response.body)
+            print("[LPM] Successfully installed to " .. target_path)
+            add_dependency_to_config(pkg_name)
+        } else {
+            error("[LPM] Failed to download package. HTTP Status: " .. response.status)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════
+//  Обработка команд
+// ═══════════════════════════════════════════════
+for i in cmds {
+    if i.name == "--run" {
+        run_process("lime.exe " .. path .. " --notime")
+
+    } elif i.name == "--init" {
+        if !exists("./libs") {
+            mkdir("./libs")
+        }
+        write("./main.lm", "print('Hello, World!')")
+        var dir_name = split(os.getcwd(), "\\")::last()
+        write("./lime.toml",
+            "name = \"" .. dir_name .. "\"\n" ..
+            "description = \"New project on LimeLang\"\n\n" ..
+            "[dependencies]\n")
+        print("[LPM] Project initialized!")
+
+    } elif i.name == "--install" {
+        if i.args::len() > 0 {
+            var pkg = i.args[0]
+            install_package(pkg)
+        } else {
+            print("[LPM] Installing dependencies from lime.toml...")
+            if exists("./lime.toml") {
+                var config = read("./lime.toml")
+                print("[LPM] All dependencies up to date.")
+            } else {
+                error("[LPM] lime.toml not found. Run 'lpm --init' first.")
+            }
+        }
+    }
+}

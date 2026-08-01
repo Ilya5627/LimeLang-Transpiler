@@ -45,49 +45,70 @@ fn _write_callback(data, size, nmemb, userdata) {
 
 var _write_callback_ptr = ffi.cast("curl_write_callback", _write_callback)
 
+fn copt(n) {
+    ret ffi.cast("int", n)
+}
+
+fn clong(n) {
+    ret ffi.cast("long", n)
+}
+
+fn cnull() {
+    ret ffi.cast("void*", 0)
+}
+
 fn _request(method, url, data, headers) {
     var handle = curl.curl_easy_init()
-    if handle == nil {
-        ret {"error": "curl_easy_init failed"}
+
+    if handle == ffi.NULL {
+        ret {"error": "curl_easy_init failed", "status": -1, "body": ""}
     }
 
-    curl.curl_easy_setopt(handle, CURLOPT_URL, url)
+    curl.curl_easy_setopt(handle, copt(CURLOPT_URL), url)
 
     if method == "POST" {
-        curl.curl_easy_setopt(handle, CURLOPT_POST, clong(1))
+        curl.curl_easy_setopt(handle, copt(CURLOPT_POST), clong(1))
+
         if data != "" {
-            curl.curl_easy_setopt(handle, CURLOPT_POSTFIELDS, data)
-            curl.curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, clong(#data))
+            curl.curl_easy_setopt(handle, copt(CURLOPT_POSTFIELDS), data)
+            curl.curl_easy_setopt(handle, copt(CURLOPT_POSTFIELDSIZE), clong(#data))
         }
     } elif method == "PUT" | method == "DELETE" | method == "PATCH" {
-        curl.curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, method)
+        curl.curl_easy_setopt(handle, copt(CURLOPT_CUSTOMREQUEST), method)
+
         if data != "" {
-            curl.curl_easy_setopt(handle, CURLOPT_POSTFIELDS, data)
+            curl.curl_easy_setopt(handle, copt(CURLOPT_POSTFIELDS), data)
         }
     }
 
     var header_list = nil
-    if headers != {} {
+
+    if headers::size() > 0 {
         for k, v in headers {
             var h = k .. ": " .. v
             header_list = curl.curl_slist_append(header_list, h)
         }
+
         if header_list != nil {
-            curl.curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header_list)
+            curl.curl_easy_setopt(handle, copt(CURLOPT_HTTPHEADER), header_list)
         }
     }
 
-    curl.curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, _write_callback_ptr)
-    curl.curl_easy_setopt(handle, CURLOPT_WRITEDATA, cnull())
-    curl.curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, clong(1))
-    curl.curl_easy_setopt(handle, CURLOPT_TIMEOUT, clong(30))
+    curl.curl_easy_setopt(handle, copt(CURLOPT_WRITEFUNCTION), _write_callback_ptr)
+    curl.curl_easy_setopt(handle, copt(CURLOPT_WRITEDATA), cnull())
+    curl.curl_easy_setopt(handle, copt(CURLOPT_FOLLOWLOCATION), clong(1))
+    curl.curl_easy_setopt(handle, copt(CURLOPT_TIMEOUT), clong(30))
 
-    _response = ""
+        _response = ""
     var res = curl.curl_easy_perform(handle)
 
+    var status = 0
     var status_box = ffi.new("long[1]")
-    curl.curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, status_box)
-    var status = status_box[0]
+
+    if res == 0 {
+        curl.curl_easy_getinfo(handle, copt(CURLINFO_RESPONSE_CODE), ffi.cast("long*", status_box))
+        status = tonumber(ffi.cast("long&", status_box))
+    }
 
     if header_list != nil {
         curl.curl_slist_free_all(header_list)
@@ -99,7 +120,7 @@ fn _request(method, url, data, headers) {
         ret {"status": status, "body": _response}
     } else {
         var err = ffi.string(curl.curl_easy_strerror(res))
-        ret {"error": err, "status": status, "body": _response}
+        ret {"error": err, "status": -1, "body": _response}
     }
 }
 
