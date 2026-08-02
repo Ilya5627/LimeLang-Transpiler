@@ -1,0 +1,116 @@
+use "limegame"
+
+display.init(600, 600, "Lime 3D & Input")
+display.set_fps(60)
+
+var x = 0
+var y = 0
+
+var steps = [
+[" ", " ", " "],
+[" ", " ", " "],
+[" ", " ", " "],
+]
+
+var win = false
+
+var now = "x"
+
+loop display.is_running() {
+    if win {
+        if input.is_mouse_pressed(0) {
+            steps = [
+            [" ", " ", " "],
+            [" ", " ", " "],
+            [" ", " ", " "],
+            ]
+            x = 0
+            y = 0
+            now = "x"
+            win = false
+        }
+        draw.text("Restart?", 200, 250, 50, Color(255, 255, 255, 255))
+        draw.begin()
+        draw.clear(Colors.BLACK)
+        display.update()
+        next
+    }
+    if input.is_key_pressed(Keys.D) {
+        if x < 2 {
+            x += 1
+        }
+    }
+    if input.is_key_pressed(Keys.A) {
+        if x > 0 {
+            x -= 1
+        }
+    }
+    if input.is_key_pressed(Keys.W) {
+        if y > 0 {
+            y -= 1
+        }
+    }
+    if input.is_key_pressed(Keys.S) {
+        if y < 2 {
+            y += 1
+        }
+    }
+
+    if input.is_mouse_pressed(0) {
+        if steps[y][x] == " " {
+            steps[y][x] = now
+            if now == "x" {
+                now = "o"
+            } else {
+                now = "x"
+            }
+        }
+            print(steps, now)
+
+    }
+
+
+
+    for i = 0, 2, 1 {
+        var row = steps[i]
+        if row[0] == row[1] & row[1] == row[2] & row[0] != " " {
+            win = true
+        }
+        for j = 0, 2, 1 {
+            if i == y & j == x {
+                draw.rect(j * 200, i * 200, 200, 200, Color(237, 214, 123, 255))
+            } else {
+                draw.rect(j * 200, i * 200, 200, 200, Color(245, 224, 142, 255))
+            }
+            if row[j] != " " {
+                if row[j] == "x" {
+                    draw.text(row[j], j * 200 + 50, i * 200, 200, Colors.RED)
+                } else {
+                    draw.text(row[j], j * 200 + 50, i * 200, 200, Colors.BLUE)
+                }
+            }
+        }
+    }
+
+    if (steps[0][0] == steps[1][0] & steps[1][0] == steps[2][0] & steps[0][0] != " ")
+    | (steps[0][1] == steps[1][1] & steps[1][1] == steps[2][1] & steps[0][1] != " ")
+    | (steps[0][2] == steps[1][2] & steps[1][2] == steps[2][2] & steps[0][2] != " ") {
+        win = true
+    }
+    if (steps[0][0] == steps[1][1] & steps[1][1] == steps[2][2] & steps[0][0] != " ")
+    | (steps[0][2] == steps[1][1] & steps[1][1] == steps[2][0] & steps[0][2] != " ") {
+        win = true
+    }
+
+    draw.rect(200, 0, 2, 600, Color(176, 150, 48, 255))
+    draw.rect(400, 0, 2, 600, Color(176, 150, 48, 255))
+    draw.rect(0, 200, 600, 2, Color(176, 150, 48, 255))
+    draw.rect(0, 400, 600, 2, Color(176, 150, 48, 255))
+
+    draw.begin()
+    draw.clear(Colors.BLACK)
+
+    display.update()
+}
+
+display.quit()

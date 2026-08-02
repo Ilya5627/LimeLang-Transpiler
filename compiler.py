@@ -58,7 +58,7 @@ def format_lime_error(message: str, line: int = None, code: str = None, path: st
 keys = ["if", "elif", "ret", "fn", "else", "use", "match", "case", "var", "for", "loop", "load", "struct", "usec", "as",
         "in", "next", "stop", "try", "catch"]
 ops = ['=', '+', '-', "*", '/', '==', '!=', '//', '%', '(', ')', '{', '}', '>', '<', '>=', '<=', ':', ';', '#', '.',
-       ',', "^", '[', ']', '|', '&', '!', '..', "::", '+=', '-=', '*=', '/=', '->', '>>', '`']
+       ',', "^", '[', ']', '|', '&', '!', '..', "::", '+=', '-=', '*=', '/=', '->', '>>', '`', '?.', '?:', '@', '?']
 
 
 def get_libs_path():
@@ -278,7 +278,7 @@ class Parser:
         if self.peek()[0] == 'KEY' and self.peek()[1] == 'stop':
             return self.parse_stop()
         if self.peek()[0] == 'KEY' and self.peek()[1] == 'try':
-            return self.parse_stop()
+            return self.parse_try()
         if self.peek()[0] == 'ID' and self.peek(1)[1] == ":":
             return self.parse_met()
         if self.peek()[0] == 'ID' and self._is_assignment_ahead():
@@ -289,6 +289,40 @@ class Parser:
             self.next()
             return {"type": "end"}
         return self.parse_expression()
+
+    def parse_try(self) -> Dict:
+        """
+        try {
+            ...
+        } catch e {
+            ...
+        }
+
+        Также поддерживается вариант без переменной:
+        try { ... } catch { ... }
+        """
+        self.match('KEY')  # 'try'
+        body = self.parse_statement()  # блок или одиночный statement
+
+        # Ожидаем 'catch'
+        tok = self.peek()
+        if not (tok[0] == 'KEY' and tok[1] == 'catch'):
+            raise LimeError("Ожидалось 'catch' после блока 'try'", line=tok[2])
+        self.next()  # съедаем 'catch'
+
+        # Необязательная переменная для ошибки
+        catch_var = None
+        if self.peek()[0] == 'ID':
+            catch_var = self.match('ID')[1]
+
+        catch_body = self.parse_statement()
+
+        return {
+            'type': 'try',
+            'body': body,
+            'catch_var': catch_var,
+            'catch_body': catch_body
+        }
 
     def parse_block(self):
         statements = []
@@ -575,13 +609,13 @@ class Parser:
 
     def parse_func(self) -> Dict:
         left = self.parse_primary()
-        while self.peek()[0] == 'OP' and self.peek()[1] in ('(', '.', '[', '::'):
+        while self.peek()[0] == 'OP' and self.peek()[1] in ('(', '.', '[', '::', '?.', '?:'):
             op = self.next()[1]
             if op == '(':
                 args = []
                 while self.peek()[0] != 'OP' or self.peek()[1] != ')':
                     if self.peek()[0] == 'EOF':
-                        raise LimeError("Ожидалась ')'", line=self.line())
+                        raise LimeError("Excepted ')'", line=self.line())
                     args.append(self.parse_expression())
                     if self.peek()[0] == "OP" and self.peek()[1] == ',':
                         self.next()
@@ -589,9 +623,12 @@ class Parser:
                 left = {'type': 'func', 'left': left, 'args': args}
             elif op == '.':
                 if self.peek()[0] != 'ID':
-                    raise LimeError(f"Ожидался идентификатор после '.', получен {self.peek()[0]}", line=self.line())
+                    raise LimeError(f"Excepted ID after '.', got {self.peek()[0]}", line=self.line())
                 field_name = self.next()[1]
-                left = {'type': 'dot', 'left': left, 'field': field_name}
+                left = {'type': 'dot', 'left': left, 'field': field_name, 'safety': False}
+            elif op == '?.':
+                field_name = self.match("ID")[1]
+                left = {'type': 'dot', 'left': left, 'field': field_name, 'safety': True}
             elif op == "::":
                 func = self.match("ID")[1]
                 if self.peek()[0] != "OP" or self.peek()[1] != "(":
@@ -604,6 +641,18 @@ class Parser:
                         self.next()
                 self.match_op(')')
                 left = {'type': 'eval_met', 'cls': left, "func": func, 'args': args}
+            elif op == "?:":
+                func = self.match("ID")[1]
+                if self.peek()[0] != "OP" or self.peek()[1] != "(":
+                    raise LimeError("Need '(' token but given " + self.peek()[1], line=self.line())
+                self.next()
+                args = []
+                while self.peek()[1] != ")":
+                    args.append(self.parse_expression())
+                    if self.peek()[1] == ",":
+                        self.next()
+                self.match_op(')')
+                left = {'type': 'eval_met', 'cls': left, "func": func, 'args': args, 'safety': True}
             elif op == '[':
                 index_expr = self.parse_expression()
                 self.match_op(']')
@@ -813,33 +862,112 @@ class CodeGen:
             self.genNext(v)
         elif v["type"] == "stop":
             self.genStop(v)
+        elif v["type"] == "try":
+            self.genTry(v)
         elif v["type"] == "end":
             return
         else:
             self.genExpr(v)
         self.gen += '\n'
 
+    def genTry(self, v):
+        """
+        Генерирует:
+            local _try_ok_N, _try_err_N = pcall(function()
+                <body>
+            end)
+            if not _try_ok_N then
+                local e = _try_err_N   -- если есть catch_var
+                <catch_body>
+            end
+        """
+        # Уникальный суффикс, чтобы вложенные try не конфликтовали
+        if not hasattr(self, 'try_counter'):
+            self.try_counter = 0
+        self.try_counter += 1
+        uid = self.try_counter
+
+        ok_var = f"_try_ok_{uid}"
+        err_var = f"_try_err_{uid}"
+
+        # --- try-блок через pcall ---
+        self.gen += f"local {ok_var}, {err_var} = pcall(function()\n"
+        self.genSt(v["body"])
+        self.gen += "\nend)\n"
+
+        # --- catch-блок ---
+        self.gen += f"if not {ok_var} then\n"
+
+        if v.get("catch_var"):
+            self.gen += f"local {v['catch_var']} = {err_var}\n"
+
+        self.genSt(v["catch_body"])
+        self.gen += "end"
+
     def genMatch(self, v):
+        # Уникальный идентификатор для этой конструкции match,
+        # чтобы переменные не конфликтовали при вложенных match
+        if not hasattr(self, 'match_counter'):
+            self.match_counter = 0
+        self.match_counter += 1
+        uid = self.match_counter
+
+        # Проверяем, является ли выражение в match литералом массива (например, [a, b])
+        is_array_match = v['expr']["type"] == "array"
+
+        if is_array_match:
+            # ОПТИМИЗАЦИЯ: Вместо создания таблицы _arr({...}), мы вычисляем
+            # каждый элемент массива в отдельную локальную переменную.
+            items = v['expr']["items"]
+            for idx, item in enumerate(items):
+                self.gen += f"local _m_{uid}_{idx} = "
+                self.genExpr(item)
+                self.gen += "\n"
+        else:
+            # Для обычных выражений (числа, строки, переменные) вычисляем один раз
+            self.gen += f"local _m_{uid} = "
+            self.genExpr(v['expr'])
+            self.gen += "\n"
+
         fst = True
-        for i in v["cases"]:
+        for case in v["cases"]:
+            case_expr = case['expr']
+
+            # Обработка wildcard (дефолтного случая) '_'
+            if case_expr["type"] == "variable" and case_expr["name"] == "_":
+                self.gen += "else\n"
+                self.genSt(case["stmt"])
+                continue
+
             if fst:
                 fst = False
                 self.gen += "if "
-                self.genExpr(v['expr'])
-                self.gen += " == "
-                self.genExpr(i['expr'])
-                self.gen += " then\n"
-            elif i["expr"]["type"] == "variable" and i["expr"]["name"] == "_":
-                self.gen += "else\n"
             else:
-                self.gen += "elif "
-                self.genExpr(v['expr'])
-                self.gen += " == "
-                self.genExpr(i['expr'])
-                self.gen += " then\n"
-            self.genSt(i["stmt"])
+                self.gen += "elseif "
 
-        self.gen += "end"
+            # Если И выражение match, И выражение case являются массивами одинаковой длины
+            if is_array_match and case_expr["type"] == "array" and len(v['expr']["items"]) == len(case_expr["items"]):
+                # Генерируем поэлементное сравнение: (_m_uid_0 == val0) and (_m_uid_1 == val1)
+                for idx, case_item in enumerate(case_expr["items"]):
+                    if idx > 0:
+                        self.gen += " and "
+                    self.gen += f"(_m_{uid}_{idx} == "
+                    self.genExpr(case_item)
+                    self.gen += ")"
+            else:
+                # Стандартное сравнение для скалярных типов (числа, строки, булевы)
+                # Если match был массивом, а кейс вдруг нет (или длины разные) — это заведомо false
+                if is_array_match:
+                    self.gen += "false"
+                else:
+                    self.gen += f"(_m_{uid} == "
+                    self.genExpr(case_expr)
+                    self.gen += ")"
+
+            self.gen += " then\n"
+            self.genSt(case["stmt"])
+
+        self.gen += "end;"
 
     def genVar(self, v):
         self.gen += "local " + v["name"] + " = "
@@ -1162,16 +1290,42 @@ class CodeGen:
         self.gen += f"local {var_name} = ffi.load('{lib_path}')"
 
     def gencVar(self, v):
-        self.genTarget(v['target'])
-        match v['op']:
-            case '=':
-                self.gen += " = "
-            case _:
-                self.gen += " = ("
-                self.genTarget(v['target'])
-                self.gen += f") {v['op'][0]} "
+        target = v['target']
+        op = v['op']
+        value = v['value']
 
-        self.genExpr(v['value'])
+        # ═══ a[i] = v  или  a[i] += v ═══
+        if target['type'] == 'index':
+            self.gen += "_setidx("
+            self.genExpr(target['left'])
+            self.gen += ", "
+            self.genExpr(target['index'])
+            self.gen += ", "
+
+            if op == '=':
+                self.genExpr(value)
+            else:
+                # a[i] += v  →  _setidx(a, i, _idx(a, i) + v)
+                self.gen += "(_idx("
+                self.genExpr(target['left'])
+                self.gen += ", "
+                self.genExpr(target['index'])
+                self.gen += f") {op[0]} "
+                self.genExpr(value)
+                self.gen += ")"
+
+            self.gen += ")"
+            return
+
+        # ═══ a = v,  a.b = v,  a.b += v ═══
+        self.genTarget(target)
+        if op == '=':
+            self.gen += " = "
+        else:
+            self.gen += " = ("
+            self.genTarget(target)
+            self.gen += f") {op[0]} "
+        self.genExpr(value)
 
     def genTarget(self, t):
         if t['type'] == 'variable':
@@ -1182,7 +1336,11 @@ class CodeGen:
         elif t['type'] == 'index':
             self.genTarget(t['left'])
             self.gen += "["
-            self.genExpr(t['index'])
+            if t['index'].get('type') == 'string':
+                self.genExpr(t['index'])
+            else:
+                self.genExpr(t['index'])
+                self.gen += " + 1"
             self.gen += "]"
 
     def genFunction(self, v):
@@ -1305,16 +1463,26 @@ class CodeGen:
             self.gen += v["op"] if v["op"] != "!" else " not "
             self.genExpr(v["operand"])
         elif v["type"] == "eval_met":
-            self.genExpr(v["cls"])
-            self.gen += ":" + v["func"]
-            self.gen += "("
-            j = 0
-            for i in v['args']:
-                self.genExpr(i)
-                if len(v["args"]) - 1 > j:
+            if v.get('safety'):
+                # a?:m(x, y) → _safe_call(a, "m", x, y)
+                self.gen += "_safe_call("
+                self.genExpr(v["cls"])
+                self.gen += f', "{v["func"]}"'
+                for i in v['args']:
                     self.gen += ", "
-                j += 1
-            self.gen += ')'
+                    self.genExpr(i)
+                self.gen += ')'
+            else:
+                self.genExpr(v["cls"])
+                self.gen += ":" + v["func"]
+                self.gen += "("
+                j = 0
+                for i in v['args']:
+                    self.genExpr(i)
+                    if len(v["args"]) - 1 > j:
+                        self.gen += ", "
+                    j += 1
+                self.gen += ')'
         elif v["type"] == "string":
             self.gen += f'("{v["value"]}")'
         elif v["type"] == "variable":
@@ -1330,13 +1498,27 @@ class CodeGen:
                 j += 1
             self.gen += ')'
         elif v["type"] == "dot":
-            self.genExpr(v['left'])
-            self.gen += "." + v["field"]
+            if v.get('safety'):
+                # a?.b → _safe_dot(a, "b")
+                self.gen += "_safe_dot("
+                self.genExpr(v['left'])
+                self.gen += f', "{v["field"]}")'
+            else:
+                self.genExpr(v['left'])
+                self.gen += "." + v["field"]
         elif v["type"] == "index":
-            self.genExpr(v['left'])
-            self.gen += "["
-            self.genExpr(v['index'])
-            self.gen += "]"
+            if v['index'].get('type') == 'string':
+                self.genExpr(v['left'])
+                self.gen += "["
+                self.genExpr(v['index'])
+                self.gen += "]"
+            else:
+                # Числовые ключи — через _idx
+                self.gen += "_idx("
+                self.genExpr(v['left'])
+                self.gen += ", "
+                self.genExpr(v['index'])
+                self.gen += ")"
         elif v["type"] == "array":
             self.gen += "_arr({"
             j = 0

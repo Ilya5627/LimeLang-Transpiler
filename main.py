@@ -11,8 +11,9 @@ import importlib
 from compiler import Parser, lex, CodeGen, LimeError, format_lime_error, resolve_lua_line
 from config import *
 
-if len(sys.argv) > 0 and (sys.argv[0].endswith(".py") or sys.argv[0].endswith(".exe")):
+if len(sys.argv) > 0:
     sys.argv.pop(0)
+
 
 if len(sys.argv) < 1:
     print("Must be given 1 or more arguments to app")
@@ -97,6 +98,14 @@ if not os.path.exists(path):
     print("Unknown path to project or file: " + sys.argv[0])
     sys.exit(1)
 
+main_lm_file = "main.lm"
+
+if os.path.isfile(path):
+    p = path.split("\\")
+    path = p[:-1]
+    main_lm_file = p[-1]
+    path = os.path.normpath("/".join(path))
+
 if os.path.isdir(path):
     if "--build-exe" in options:
         with open(os.path.join(path, "output.lua"), encoding="utf-8", mode="r") as f:
@@ -139,14 +148,14 @@ if os.path.isdir(path):
             print(f"\nExecuted in {(b - a) * 1000 // 1} ms")
 
     else:
-        with open(os.path.join(path, "main.lm"), encoding="utf-8", mode="r") as f:
+        with open(os.path.join(path, main_lm_file), encoding="utf-8", mode="r") as f:
             code = f.read()
 
         try:
             tokens = lex(code)
             parser = Parser(tokens)
             ast = parser.parse()
-            main_file_path = os.path.normpath(os.path.join(path, "main.lm"))
+            main_file_path = os.path.normpath(os.path.join(path, main_lm_file))
             codegen = CodeGen(ast, path, visited_files={main_file_path})
             lua_code = codegen.generate()
         except LimeError as e:
